@@ -57,7 +57,7 @@ public struct EngineCardEvent: Codable, Equatable {
     /// für den Replay-Ticker ist eine plausible Minute nötig.
     public let minute: Int
 
-    public init(playerID: UUID, playerName: String, isRed: Bool, teamName: String, minute: Int) {
+    public init(playerID: UUID, playerName: String, isRed: Bool, teamName: String, minute: Int = 0) {
         self.playerID = playerID
         self.playerName = playerName
         self.isRed = isRed
@@ -75,7 +75,7 @@ public struct EngineInjuryEvent: Codable, Equatable {
     /// Spielminute der Verletzung (5..85).
     public let minute: Int
 
-    public init(playerID: UUID, playerName: String, isHome: Bool, weeks: Int, minute: Int) {
+    public init(playerID: UUID, playerName: String, isHome: Bool, weeks: Int, minute: Int = 0) {
         self.playerID = playerID
         self.playerName = playerName
         self.isHome = isHome

@@ -43,12 +43,12 @@ public enum LineupValidator {
         guard foreign.isEmpty else {
             throw ValidationError(reason: "Spieler-IDs gehören nicht zum Verein: \(foreign)")
         }
-        let unavailable = playerIDs.compactMap { id -> String? in
-            guard let p = clubPlayers.first(where: { $0.id == id }) else { return nil }
-            return p.isAvailable ? nil : "\(p.name) (\(p.status.rawValue))"
-        }
-        guard unavailable.isEmpty else {
-            throw ValidationError(reason: "Spieler nicht aufstellbar: \(unavailable.joined(separator: ", "))")
-        }
+        // KRANK/VERLETZT/GESPERRT sind im Lineup ZULÄSSIG, werden in
+        // `MatchEngine.pickLineup` durch `isAvailable` rausgefiltert. Frank-
+        // Bug 2026-05-09: vorher wurde der Submit hart abgelehnt, sobald
+        // ein gerade-erkrankter Spieler in der gespeicherten Aufstellung
+        // stand — dadurch konnte Frank keinen Spieltag mehr senden, ohne
+        // den Squad neu aufzustellen. Solo-Pendant (`Game.lineupCheck`,
+        // `MainMenuView.swift:947ff`) filtert silent. Wir matchen das.
     }
 }

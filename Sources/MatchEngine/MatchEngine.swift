@@ -316,14 +316,23 @@ public enum MatchEngine {
         result.homeGoals = outcome.homeGoals
         result.awayGoals = outcome.awayGoals
 
-        // Schützen wählen, gewichtet nach Attack-Skill
+        // Aufgestellte ermitteln — `pickGoalScorer` und der Karten-Pool
+        // operieren AUF DER AUFSTELLUNG (KICKER.BAS:9438 `Pl.info(A,15)=1`).
+        // Frank-Bug 2026-05-09: vorher reichten wir `homePlayers/awayPlayers`
+        // (Gesamtkader) ins `pickGoalScorer`, deshalb konnten Reserve-Spieler
+        // Tore schießen, die gar nicht im Lineup standen.
+        let homeLineupPlayers = pickLineup(from: homePlayers, lineupIDs: homeLineup)
+        let awayLineupPlayers = pickLineup(from: awayPlayers, lineupIDs: awayLineup)
+
+        // Schützen aus der Aufstellung wählen (Original-Gewicht
+        // siehe `pickGoalScorer`).
         var homeTally = 0
         var awayTally = 0
         for gm in outcome.goalMinutes.sorted(by: { $0.minute < $1.minute }) {
             if gm.isHome { homeTally += 1 } else { awayTally += 1 }
             let scorer = gm.isHome
-                ? pickGoalScorer(from: homePlayers, using: &rng)
-                : pickGoalScorer(from: awayPlayers, using: &rng)
+                ? pickGoalScorer(from: homeLineupPlayers, using: &rng)
+                : pickGoalScorer(from: awayLineupPlayers, using: &rng)
             result.goalScorers.append(EngineGoalEvent(
                 scorerID: scorer.id,
                 scorerName: scorer.name,
@@ -334,10 +343,8 @@ public enum MatchEngine {
         }
 
         // Karten (KICKER.BAS:2639/2705) — nur Feldspieler aus dem Lineup
-        let homeOnField = pickLineup(from: homePlayers, lineupIDs: homeLineup)
-            .filter { $0.position != .goalkeeper }
-        let awayOnField = pickLineup(from: awayPlayers, lineupIDs: awayLineup)
-            .filter { $0.position != .goalkeeper }
+        let homeOnField = homeLineupPlayers.filter { $0.position != .goalkeeper }
+        let awayOnField = awayLineupPlayers.filter { $0.position != .goalkeeper }
 
         // D-4: 0..<N Range (Original GFA `Random(N)` = 0..N-1).
         // Gelb total: A% = Random(40)^(1/3) + 2 - Sqr(Random(9))
@@ -406,8 +413,8 @@ public enum MatchEngine {
             for gm in et.goalMinutes.sorted(by: { $0.minute < $1.minute }) {
                 if gm.isHome { homeTally += 1 } else { awayTally += 1 }
                 let scorer = gm.isHome
-                    ? pickGoalScorer(from: homePlayers, using: &rng)
-                    : pickGoalScorer(from: awayPlayers, using: &rng)
+                    ? pickGoalScorer(from: homeLineupPlayers, using: &rng)
+                    : pickGoalScorer(from: awayLineupPlayers, using: &rng)
                 result.goalScorers.append(EngineGoalEvent(
                     scorerID: scorer.id,
                     scorerName: scorer.name,
@@ -452,33 +459,65 @@ public enum MatchEngine {
         }
     }
 
-    /// Schütze gewichtet nach Attack-Skill (+1 als Floor, damit auch
-    /// schwache Spieler treffen können). D-5-Fix: liefert ID + Name,
-    /// nicht nur Name. Fallback bei leerem Pool: erster Spieler oder
-    /// ein synthetisches „Unbekannt"-Sentinel.
+    /// Torschütze auswählen — Port von `Torschuetze_bestimmen`
+    /// (KICKER.BAS:9425-9469). Drei wichtige Original-Eigenschaften:
+    ///
+    /// 1. **Pool = nur Aufgestellte**, nicht der Gesamtkader.
+    ///    Original-Filter `Pl.info(A%,15)=1` (Aufstellungsmarker).
+    ///    Frank-Bug 2026-05-09: bisher nahmen wir `players` (Kader),
+    ///    deshalb konnten Reserve-Spieler Tore schießen.
+    ///
+    /// 2. **Gewicht = (mid/5 + attack) / 2** — original Zeile 9456:
+    ///    `B%=(Pl.info%(A%,19)/5+Pl.info%(A%,20))/2`. Mittelfeldspieler
+    ///    bekommen so einen kleinen Bonus über ihren Mittelfeld-Skill;
+    ///    Verteidiger schießen praktisch nie (kleine attack + kleine mid),
+    ///    Torwart hat alle Skill-Felder ≈ 0 → wird natürlich aussortiert.
+    ///
+    /// 3. **Rejection-Sampling**: Spieler ziehen, B% ≥ Random(0..7) → Treffer,
+    ///    sonst weiter würfeln (Original Zeilen 9433-9460). Wir limitieren
+    ///    auf `maxAttempts`, damit ein extrem schwacher Pool nicht endlos
+    ///    würfelt — Fallback ist dann der Spieler mit höchstem Gewicht.
+    ///
+    /// Fallback bei komplett leerem Pool: synthetisches „Unbekannt"-Sentinel
+    /// (verhindert Crash, sollte in der Praxis nie erreicht werden, weil
+    /// Tore nur entstehen wenn 11 Spieler aufgestellt sind).
     public static func pickGoalScorer<R: RandomNumberGenerator>(
-        from players: [EnginePlayer],
+        from lineup: [EnginePlayer],
         using rng: inout R
     ) -> (id: UUID, name: String) {
-        let scorerCandidates = players.filter { $0.isAvailable && $0.position != .goalkeeper }
-        guard !scorerCandidates.isEmpty else {
+        // Aufgestellte ohne Torwart — Original-Algorithmus würde den Torwart
+        // theoretisch zulassen (B%-Würfel filtert ihn über Skill ≈ 0 raus),
+        // aber expliziter Position-Filter ist defensiver und auch gegenüber
+        // KDT-Daten mit unerwarteten Skill-Werten robust.
+        let candidates = lineup.filter { $0.isAvailable && $0.position != .goalkeeper }
+        guard !candidates.isEmpty else {
             return (id: UUID(), name: "Unbekannt")
         }
 
-        // Original `Pl.info(N,20)+1` — Int-Sicht des Attack-Skills.
-        let weights = scorerCandidates.map { Double(Int($0.skillAttack) + 1) }
-        let total = weights.reduce(0, +)
-        var random = Double.random(in: 0..<total, using: &rng)
-
-        for (i, weight) in weights.enumerated() {
-            random -= weight
-            if random <= 0 {
-                return (id: scorerCandidates[i].id, name: scorerCandidates[i].name)
-            }
+        // Original `B%=(Pl.info(A,19)/5+Pl.info(A,20))/2` — Int-Division
+        // wie in GFA. `+1` damit auch ein Spieler mit 0/0 noch ziehen kann
+        // (sonst Endlosschleife im Reject-Sampling bei sehr schwachem Pool).
+        func weight(_ p: EnginePlayer) -> Int {
+            (Int(p.skillMidfield) / 5 + Int(p.skillAttack)) / 2
         }
 
-        let last = scorerCandidates.last!
-        return (id: last.id, name: last.name)
+        // Rejection-Sampling — Original-Pfad. `Random(8)` = 0..7 (GFA-Semantik
+        // wie D-4-Drift). Wir cappen auf 32 Versuche; danach greift der
+        // Fallback (max-Gewicht), damit bei pathologischen Lineups kein
+        // Live-Lock entsteht.
+        for _ in 0..<32 {
+            let idx = Int.random(in: 0..<candidates.count, using: &rng)
+            let p = candidates[idx]
+            let b = weight(p)
+            if b >= Int.random(in: 0..<8, using: &rng) {
+                return (id: p.id, name: p.name)
+            }
+        }
+        // Fallback: stärksten Schützen wählen (deterministisch, nicht
+        // random — sonst rührt der Fallback-Pfad das RNG-State noch weiter
+        // auf und bricht den Replay-Determinismus).
+        let best = candidates.max(by: { weight($0) < weight($1) }) ?? candidates[0]
+        return (id: best.id, name: best.name)
     }
 
     // MARK: - Difficulty-Skalierung (Tribute-Edition)

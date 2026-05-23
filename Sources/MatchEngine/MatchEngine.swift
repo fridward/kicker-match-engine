@@ -145,11 +145,19 @@ public enum MatchEngine {
     ) -> [EnginePlayer] {
         let available = players.filter { $0.isAvailable }
 
-        if let ids = lineupIDs, !ids.isEmpty {
-            let chosen = available.filter { ids.contains($0.id) }
-            if !chosen.isEmpty { return chosen }
+        // Frank-Bug 2026-05-23: vorher fiel der Fallback auf Auto-Top-11
+        // aus dem GESAMTEN Kader, sobald `chosen` leer war (z.B. weil alle
+        // aufgestellten Spieler unavailable wurden). Folge: Bank-Spieler
+        // konnten Tore schießen, die nie auf dem Feld standen.
+        // Jetzt strikt: wenn der Caller ein Lineup übergibt, gilt
+        // ausschließlich dieses Lineup — auch wenn dadurch <11 Spieler
+        // bleiben. Forfeit (<7 verfügbar) ist Aufgabe des Callers.
+        if let ids = lineupIDs {
+            return available.filter { ids.contains($0.id) }
         }
 
+        // Kein explizites Lineup übergeben → Auto-Top-11 als
+        // Default-Aufstellung (Solo-Fallback bei fehlender Aufstellung).
         var picked: [EnginePlayer] = []
         if let bestGK = available
             .filter({ $0.position == .goalkeeper })

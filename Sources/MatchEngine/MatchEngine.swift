@@ -1,5 +1,103 @@
 import Foundation
 
+// MARK: - Skip-kompatible Random/Math-Helfer
+//
+// Skip/Kotlin kann weder `Int.random(in:using:)`/`Bool.random(using:)`/
+// `Collection.randomElement(using:)` mit einem generischen `inout R:
+// RandomNumberGenerator` aufrufen, noch `Double.squareRoot()`. Diese
+// Helfer kapseln das: Auf Apple/native (`#else`) rufen sie EXAKT die
+// Original-Stdlib-API auf → iOS-Verhalten bleibt byte-identisch. Auf
+// Skip/Android (`#if SKIP`) leiten sie das Ergebnis direkt aus
+// `rng.next()` ab. Die Server-/iOS-Sequenz wird dadurch auf Android nicht
+// bit-genau repliziert — Android-Solo ist von iOS/Backend unabhängig,
+// daher genügt geräte-interne Selbst-Konsistenz (gleiche Begründung wie
+// beim bereits bestehenden `SeededRandom.double()`-Split).
+
+#if SKIP
+/// Skip-only: liefert eine gleichverteilte Ganzzahl in `0..<bound`.
+/// Rechnet ausschliesslich über `Double(ULong)` + Double-Arithmetik +
+/// `Int(Double)` — Skip/Kotlin hat keinen verlässlichen ULong-`%`/
+/// ULong→Int-Pfad (`%` ist dort optional, `Int(ULong)` mappt auf den
+/// String-Ctor). 2^64 als Normierungs-Konstante. `bound` ist im Match-
+/// Engine immer klein (< 2^31), die Double-Auflösung ist somit unkritisch.
+func engineNextBounded<R: RandomNumberGenerator>(_ bound: Int, _ rng: inout R) -> Int {
+    if bound <= 1 { return 0 }
+    // `>> 11` reduziert auf 53 Bits, damit `Double(ULong)` in Skip nicht
+    // optional/failable wird (volle 64 Bit liefern dort `Double?`). Identische
+    // Normierung wie `SeededRandom.double()`.
+    let frac = Double(rng.next() >> 11) * (1.0 / 9007199254740992.0)   // [0,1)
+    let scaled = Int(frac * Double(bound))
+    return scaled >= bound ? bound - 1 : scaled
+}
+#endif
+
+func engineRandomInt<R: RandomNumberGenerator>(_ range: Range<Int>, _ rng: inout R) -> Int {
+    #if SKIP
+    return range.lowerBound + engineNextBounded(range.upperBound - range.lowerBound, &rng)
+    #else
+    return Int.random(in: range, using: &rng)
+    #endif
+}
+
+/// Inklusiver Bereich `lower...upper` über explizite Int-Grenzen — Skips
+/// `ClosedRange<Int>` lässt sich im generischen Kontext nicht zuverlässig
+/// auslesen, deshalb übergeben die Aufrufer die Grenzen direkt.
+func engineRandomIntClosed<R: RandomNumberGenerator>(_ lower: Int, _ upper: Int, _ rng: inout R) -> Int {
+    #if SKIP
+    return lower + engineNextBounded(upper - lower + 1, &rng)
+    #else
+    return Int.random(in: lower...upper, using: &rng)
+    #endif
+}
+
+func engineRandomBool<R: RandomNumberGenerator>(_ rng: inout R) -> Bool {
+    #if SKIP
+    return engineNextBounded(2, &rng) == 1
+    #else
+    return Bool.random(using: &rng)
+    #endif
+}
+
+/// Wählt einen zufälligen Index in `0..<count` oder `nil` bei leerem Bereich.
+func engineRandomIndex<R: RandomNumberGenerator>(_ count: Int, _ rng: inout R) -> Int? {
+    guard count > 0 else { return nil }
+    #if SKIP
+    return engineNextBounded(count, &rng)
+    #else
+    return (0..<count).randomElement(using: &rng)
+    #endif
+}
+
+/// Fisher-Yates-Shuffle über `rng`. Auf Apple/native exakt das Stdlib-
+/// `shuffled(using:)`; auf Skip eine eigene Fisher-Yates-Implementierung
+/// (Stdlib-`shuffled(using:)` mit generischem RNG ist dort nicht verfügbar).
+func engineShuffled<E, R: RandomNumberGenerator>(_ array: [E], _ rng: inout R) -> [E] {
+    #if SKIP
+    var result = array
+    var i = result.count - 1
+    while i > 0 {
+        let j = engineNextBounded(i + 1, &rng)
+        let tmp = result[i]
+        result[i] = result[j]
+        result[j] = tmp
+        i -= 1
+    }
+    return result
+    #else
+    return array.shuffled(using: &rng)
+    #endif
+}
+
+func engineSqrt(_ x: Double) -> Double {
+    #if SKIP
+    // `Double.squareRoot()` ist in Skip nicht verfügbar; `Foundation.sqrt`
+    // (→ kotlin.math.sqrt) liefert denselben IEEE-754-Wert.
+    return sqrt(x)
+    #else
+    return x.squareRoot()
+    #endif
+}
+
 /// Server-seitige Match-Engine — Port der iOS-`MatchEngine` (Tribute-
 /// Edition Build 400), die wiederum 1:1 aus KICKER.BAS portiert ist.
 ///
@@ -160,14 +258,14 @@ public enum MatchEngine {
         // Default-Aufstellung (Solo-Fallback bei fehlender Aufstellung).
         var picked: [EnginePlayer] = []
         if let bestGK = available
-            .filter({ $0.position == .goalkeeper })
+            .filter({ $0.position == EnginePosition.goalkeeper })
             .sorted(by: { $0.skillGoalkeeping > $1.skillGoalkeeping })
             .first
         {
             picked.append(bestGK)
         }
         let remaining = available
-            .filter { $0.position != .goalkeeper }
+            .filter { $0.position != EnginePosition.goalkeeper }
             .sorted { $0.overallSkill > $1.overallSkill }
             .prefix(11 - picked.count)
         picked.append(contentsOf: remaining)
@@ -238,30 +336,30 @@ public enum MatchEngine {
 
         // Tick-Loop (BAS:8010-8036)
         for i in 0..<ticks {
-            let angriff = Int.random(in: 0..<antI, using: &rng)
+            let angriff = engineRandomInt(0..<antI, &rng)
             let attackerIsHome = angriff < antA
             let minute = startMinute + Int(Double(i) * minuteStep) + 1
 
             if attackerIsHome {
                 result.homeAttempts += 1
                 var tor = aA + aM / 4 - bV - bM / 4 + 62
-                if tor > Int.random(in: 0..<300, using: &rng) {
+                if tor > engineRandomInt(0..<300, &rng) {
                     tor = aA + aM / 4 - bT * 3 / 2 + 75
-                    if tor > Int.random(in: 0..<200, using: &rng) {
+                    if tor > engineRandomInt(0..<200, &rng) {
                         result.homeGoals += 1
-                        result.goalMinutes.append(.init(minute: minute, isHome: true))
+                        result.goalMinutes.append(HalfResult.GoalMinute(minute: minute, isHome: true))
                     }
                 }
             } else {
                 result.awayAttempts += 1
                 var tor = bA + bM / 4 - aV - bM / 4 + 62
-                if tor > Int.random(in: 0..<300, using: &rng) {
+                if tor > engineRandomInt(0..<300, &rng) {
                     // D-6: Original-Tippfehler `B%(6)/4` (zweimal bA/4) statt
                     // `B%(5)/4` (mid). 1:1 übernommen — Frank-Regel.
                     tor = bA + bA / 4 - aT * 3 / 2 + 75
-                    if tor > Int.random(in: 0..<200, using: &rng) {
+                    if tor > engineRandomInt(0..<200, &rng) {
                         result.awayGoals += 1
-                        result.goalMinutes.append(.init(minute: minute, isHome: false))
+                        result.goalMinutes.append(HalfResult.GoalMinute(minute: minute, isHome: false))
                     }
                 }
             }
@@ -351,24 +449,24 @@ public enum MatchEngine {
         }
 
         // Karten (KICKER.BAS:2639/2705) — nur Feldspieler aus dem Lineup
-        let homeOnField = homeLineupPlayers.filter { $0.position != .goalkeeper }
-        let awayOnField = awayLineupPlayers.filter { $0.position != .goalkeeper }
+        let homeOnField = homeLineupPlayers.filter { $0.position != EnginePosition.goalkeeper }
+        let awayOnField = awayLineupPlayers.filter { $0.position != EnginePosition.goalkeeper }
 
         // D-4: 0..<N Range (Original GFA `Random(N)` = 0..N-1).
         // Gelb total: A% = Random(40)^(1/3) + 2 - Sqr(Random(9))
         let totalYellow = max(0,
-            Int(pow(Double(Int.random(in: 0..<40, using: &rng)), 1.0 / 3.0))
+            Int(pow(Double(engineRandomInt(0..<40, &rng)), 1.0 / 3.0))
             + 2
-            - Int(Double(Int.random(in: 0..<9, using: &rng)).squareRoot())
+            - Int(engineSqrt(Double(engineRandomInt(0..<9, &rng))))
         )
-        let yellowHome = totalYellow > 0 ? Int.random(in: 0...totalYellow, using: &rng) : 0
+        let yellowHome = totalYellow > 0 ? engineRandomIntClosed(0, totalYellow, &rng) : 0
         let yellowAway = totalYellow - yellowHome
 
         // Rot total: A% = 3 - Sqr(Sqr(Random(230)+1))
         let totalRed = max(0,
-            3 - Int(Double(Int.random(in: 0..<230, using: &rng) + 1).squareRoot().squareRoot())
+            3 - Int(engineSqrt(engineSqrt(Double(engineRandomInt(0..<230, &rng) + 1))))
         )
-        let redHome = totalRed > 0 ? Int.random(in: 0...totalRed, using: &rng) : 0
+        let redHome = totalRed > 0 ? engineRandomIntClosed(0, totalRed, &rng) : 0
         let redAway = totalRed - redHome
 
         // Globaler Dedupe über alle vier Vergaben (BAS:2650-2657 — kein
@@ -389,23 +487,23 @@ public enum MatchEngine {
 
         // Verletzung (KICKER.BAS:3933-3947). Default 15% pro Match
         // (= Original-Wert, keine Edition-Skalierung — D-3-Fix).
-        if Int.random(in: 0..<100, using: &rng) < injuryProbabilityPercent {
-            let pickHome = Bool.random(using: &rng)
+        if engineRandomInt(0..<100, &rng) < injuryProbabilityPercent {
+            let pickHome = engineRandomBool(&rng)
             let pool: [EnginePlayer] = pickHome ? homeOnField : awayOnField
             if !pool.isEmpty,
-               let victimIdx = (0..<pool.count).randomElement(using: &rng)
+               let victimIdx = engineRandomIndex(pool.count, &rng)
             {
                 let victim = pool[victimIdx]
                 // Pausendauer (BAS:3944): Random(3)+6-Sqr(Random(25))
-                let raw = Int.random(in: 0..<3, using: &rng) + 6
-                    - Int(Double(Int.random(in: 0..<25, using: &rng)).squareRoot())
+                let raw = engineRandomInt(0..<3, &rng) + 6
+                    - Int(engineSqrt(Double(engineRandomInt(0..<25, &rng))))
                 let weeks = max(1, min(8, raw))
                 result.injury = EngineInjuryEvent(
                     playerID: victim.id,
                     playerName: victim.name,
                     isHome: pickHome,
                     weeks: weeks,
-                    minute: Int.random(in: 5...85, using: &rng)
+                    minute: engineRandomIntClosed(5, 85, &rng)
                 )
             }
         }
@@ -454,14 +552,14 @@ public enum MatchEngine {
         guard count > 0 else { return }
         let pool = candidates.filter { !bookedIDs.contains($0.id) }
         guard !pool.isEmpty else { return }
-        let picks = pool.shuffled(using: &rng).prefix(count)
+        let picks = engineShuffled(pool, &rng).prefix(count)
         for p in picks {
             list.append(EngineCardEvent(
                 playerID: p.id,
                 playerName: p.name,
                 isRed: isRed,
                 teamName: teamName,
-                minute: Int.random(in: 5...90, using: &rng)
+                minute: engineRandomIntClosed(5, 90, &rng)
             ))
             bookedIDs.insert(p.id)
         }
@@ -497,7 +595,7 @@ public enum MatchEngine {
         // theoretisch zulassen (B%-Würfel filtert ihn über Skill ≈ 0 raus),
         // aber expliziter Position-Filter ist defensiver und auch gegenüber
         // KDT-Daten mit unerwarteten Skill-Werten robust.
-        let candidates = lineup.filter { $0.isAvailable && $0.position != .goalkeeper }
+        let candidates = lineup.filter { $0.isAvailable && $0.position != EnginePosition.goalkeeper }
         guard !candidates.isEmpty else {
             return (id: UUID(), name: "Unbekannt")
         }
@@ -514,10 +612,10 @@ public enum MatchEngine {
         // Fallback (max-Gewicht), damit bei pathologischen Lineups kein
         // Live-Lock entsteht.
         for _ in 0..<32 {
-            let idx = Int.random(in: 0..<candidates.count, using: &rng)
+            let idx = engineRandomInt(0..<candidates.count, &rng)
             let p = candidates[idx]
             let b = weight(p)
-            if b >= Int.random(in: 0..<8, using: &rng) {
+            if b >= engineRandomInt(0..<8, &rng) {
                 return (id: p.id, name: p.name)
             }
         }

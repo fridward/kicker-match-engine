@@ -1,0 +1,5 @@
+# Skip configuration for MatchEngine module
+# Geteilte, deterministische Match-Engine — Skip Lite (transpiliert nach Kotlin).
+# Reines Foundation, keine UI.
+skip:
+  mode: 'transpiled'

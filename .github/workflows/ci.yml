@@ -9,9 +9,15 @@ on:
 # Nachbar-Pakete) → standalone testbar. Skip erzwingt macOS-Runner.
 jobs:
   test:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      # Package nutzt swift-tools-version 6.1 → neuestes stabiles Xcode wählen
+      # (macos-15-Default kann noch Swift < 6.1 sein).
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Skip installieren (skipstone-Plugin-Toolchain)
         run: brew install skiptools/skip/skip

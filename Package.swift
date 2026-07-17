@@ -43,8 +43,13 @@ let package = Package(
         .testTarget(
             name: "MatchEngineTests",
             dependencies: ["MatchEngine"],
-            path: "Tests/MatchEngineTests",
-            plugins: [.plugin(name: "skipstone", package: "skip")]
+            path: "Tests/MatchEngineTests"
+            // Kein skipstone-Plugin am Test-Target (bewusst, analog zu
+            // kicker-online-core): die XCTest-Suite wird nur Swift-seitig via
+            // `swift test` ausgeführt, NICHT nach Kotlin transpiliert. Mit dem
+            // Plugin bricht `swift test` ab, weil eine Tests/.../Skip/skip.yml
+            // verlangt wird — nur das Source-Target braucht skipstone (für den
+            // Android/Compose-Transpile von kicker-game-core).
         )
     ]
 )

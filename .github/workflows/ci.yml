@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# match-engine ist self-contained (nur skip.tools-Deps, keine lokalen
+# Nachbar-Pakete) → standalone testbar. Skip erzwingt macOS-Runner.
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip installieren (skipstone-Plugin-Toolchain)
+        run: brew install skiptools/skip/skip
+
+      - name: Swift-Tests
+        run: swift test

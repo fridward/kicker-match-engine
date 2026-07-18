@@ -1,7 +1,28 @@
 import XCTest
+import Foundation   // UUID — Skip mappt auf SkipFoundation
 @testable import MatchEngine
 
 final class MatchEngineTests: XCTestCase {
+
+    // MARK: - Skip-taugliche Throw-Helfer
+    // Skips XCTest-Shim kennt XCTAssertThrowsError / XCTAssertNoThrow nicht →
+    // via do/catch + XCTAssertTrue/False (beide werden transpiliert).
+
+    // Closure als LETZTER Parameter — Kotlin bindet Trailing-Lambdas ans letzte
+    // Argument (Swift ebenso), sonst landet die Closure beim String.
+    private func assertThrows(_ msg: String = "erwarteter Fehler blieb aus",
+                              _ body: () throws -> Void) {
+        var threw = false
+        do { try body() } catch { threw = true }
+        XCTAssertTrue(threw, msg)
+    }
+
+    private func assertNoThrow(_ msg: String = "unerwarteter Fehler",
+                               _ body: () throws -> Void) {
+        var threw = false
+        do { try body() } catch { threw = true }
+        XCTAssertFalse(threw, msg)
+    }
 
     // MARK: - Fixtures
 
@@ -26,23 +47,26 @@ final class MatchEngineTests: XCTestCase {
     // MARK: - SeededRandom
 
     func test_seededRandom_isDeterministic_forSameSeed() {
-        var a = SeededRandom(seed: 42)
-        var b = SeededRandom(seed: 42)
+        var a = SeededRandom(seed: UInt64(42))
+        var b = SeededRandom(seed: UInt64(42))
         for _ in 0..<100 {
             XCTAssertEqual(a.next(), b.next())
         }
     }
 
     func test_seededRandom_differs_forDifferentSeeds() {
-        var a = SeededRandom(seed: 1)
-        var b = SeededRandom(seed: 2)
+        var a = SeededRandom(seed: UInt64(1))
+        var b = SeededRandom(seed: UInt64(2))
         XCTAssertNotEqual(a.next(), b.next())
     }
 
     func test_seededRandom_zeroSeed_isReplacedWithGoldenRatio() {
         // Seed 0 wird intern durch 0x9E37… ersetzt (sonst stuck-state).
-        var a = SeededRandom(seed: 0)
-        var b = SeededRandom(seed: 0x9E3779B97F4A7C15)
+        // Konstante aus zwei 32-Bit-Hälften gebaut — Skip/Kotlin kann kein
+        // UInt64-Literal > Int64.max direkt parsen (0x9E37… > Int64.max).
+        let golden = (UInt64(0x9E3779B9) << 32) | UInt64(0x7F4A7C15)
+        var a = SeededRandom(seed: UInt64(0))
+        var b = SeededRandom(seed: golden)
         XCTAssertEqual(a.next(), b.next())
     }
 
@@ -53,61 +77,69 @@ final class MatchEngineTests: XCTestCase {
     }
 
     func test_lineupValidator_acceptsValidSubmission() {
-        XCTAssertNoThrow(try LineupValidator.validate(
-            playerIDs: players.prefix(11).map(\.id),
-            tactic: 2, matchDay: 5, currentMatchDay: 4,
-            clubPlayers: players
-        ))
+        assertNoThrow {
+            try LineupValidator.validate(
+                playerIDs: players.prefix(11).map(\.id),
+                tactic: 2, matchDay: 5, currentMatchDay: 4,
+                clubPlayers: players)
+        }
     }
 
     func test_lineupValidator_rejectsPastMatchDay() {
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: players.prefix(11).map(\.id),
-            tactic: 2, matchDay: 3, currentMatchDay: 5,
-            clubPlayers: players
-        ))
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: players.prefix(11).map(\.id),
+                tactic: 2, matchDay: 3, currentMatchDay: 5,
+                clubPlayers: players)
+        }
     }
 
     func test_lineupValidator_rejectsMatchDayBeyond34() {
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: players.prefix(11).map(\.id),
-            tactic: 2, matchDay: 35, currentMatchDay: 0,
-            clubPlayers: players
-        ))
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: players.prefix(11).map(\.id),
+                tactic: 2, matchDay: 35, currentMatchDay: 0,
+                clubPlayers: players)
+        }
     }
 
     func test_lineupValidator_rejectsMoreThan11Players() {
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: players.prefix(12).map(\.id),
-            tactic: 2, matchDay: 1, currentMatchDay: 0,
-            clubPlayers: players
-        ))
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: players.prefix(12).map(\.id),
+                tactic: 2, matchDay: 1, currentMatchDay: 0,
+                clubPlayers: players)
+        }
     }
 
     func test_lineupValidator_rejectsDuplicates() {
         let id = players[0].id
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: [id, id],
-            tactic: 2, matchDay: 1, currentMatchDay: 0,
-            clubPlayers: players
-        ))
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: [id, id],
+                tactic: 2, matchDay: 1, currentMatchDay: 0,
+                clubPlayers: players)
+        }
     }
 
     func test_lineupValidator_rejectsForeignIDs() {
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: [UUID()],
-            tactic: 2, matchDay: 1, currentMatchDay: 0,
-            clubPlayers: players
-        ))
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: [UUID()],
+                tactic: 2, matchDay: 1, currentMatchDay: 0,
+                clubPlayers: players)
+        }
     }
 
     func test_lineupValidator_rejectsTacticOutOfRange() {
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: [], tactic: 5, matchDay: 1, currentMatchDay: 0, clubPlayers: players
-        ))
-        XCTAssertThrowsError(try LineupValidator.validate(
-            playerIDs: [], tactic: -1, matchDay: 1, currentMatchDay: 0, clubPlayers: players
-        ))
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: [], tactic: 5, matchDay: 1, currentMatchDay: 0, clubPlayers: players)
+        }
+        assertThrows {
+            try LineupValidator.validate(
+                playerIDs: [], tactic: -1, matchDay: 1, currentMatchDay: 0, clubPlayers: players)
+        }
     }
 
     /// Frank-Bug 2026-05-09: KRANK/VERLETZT/GESPERRT-Spieler dürfen in der
@@ -118,11 +150,12 @@ final class MatchEngineTests: XCTestCase {
         squad[0].status = .injured
         squad[1].status = .sick
         squad[2].status = .suspended
-        XCTAssertNoThrow(try LineupValidator.validate(
-            playerIDs: squad.prefix(11).map(\.id),
-            tactic: 2, matchDay: 1, currentMatchDay: 0,
-            clubPlayers: squad
-        ))
+        assertNoThrow {
+            try LineupValidator.validate(
+                playerIDs: squad.prefix(11).map(\.id),
+                tactic: 2, matchDay: 1, currentMatchDay: 0,
+                clubPlayers: squad)
+        }
     }
 
     // MARK: - pickLineup
@@ -232,8 +265,8 @@ final class MatchEngineTests: XCTestCase {
         let homeTeam = EngineTeam(name: "Home")
         let awayTeam = EngineTeam(name: "Away")
 
-        var rng1 = SeededRandom(seed: 12345)
-        var rng2 = SeededRandom(seed: 12345)
+        var rng1 = SeededRandom(seed: UInt64(12345))
+        var rng2 = SeededRandom(seed: UInt64(12345))
         let r1 = MatchEngine.simulate(
             homeTeam: homeTeam, awayTeam: awayTeam,
             homePlayers: home, awayPlayers: away,
@@ -260,8 +293,8 @@ final class MatchEngineTests: XCTestCase {
         let awayIDs = lineupIDs(away)
 
         // Über mehrere Seeds, um Tore wahrscheinlich zu machen.
-        for seed: UInt64 in [1, 2, 3, 7, 11, 42, 99, 1000] {
-            var rng = SeededRandom(seed: seed)
+        for seed in [1, 2, 3, 7, 11, 42, 99, 1000] {
+            var rng = SeededRandom(seed: UInt64(seed))
             let r = MatchEngine.simulate(
                 homeTeam: EngineTeam(name: "Home"),
                 awayTeam: EngineTeam(name: "Away"),
@@ -287,8 +320,8 @@ final class MatchEngineTests: XCTestCase {
         let homeGKs = Set(home.filter { $0.position == .goalkeeper }.map(\.id))
         let awayGKs = Set(away.filter { $0.position == .goalkeeper }.map(\.id))
 
-        for seed: UInt64 in [1, 2, 3, 7, 11, 42] {
-            var rng = SeededRandom(seed: seed)
+        for seed in [1, 2, 3, 7, 11, 42] {
+            var rng = SeededRandom(seed: UInt64(seed))
             let r = MatchEngine.simulate(
                 homeTeam: EngineTeam(name: "Home"),
                 awayTeam: EngineTeam(name: "Away"),
@@ -313,8 +346,8 @@ final class MatchEngineTests: XCTestCase {
         let homeIDs = lineupIDs(home)
         let awayIDs = lineupIDs(away)
 
-        for seed: UInt64 in (1...50) {
-            var rng = SeededRandom(seed: seed)
+        for seed in (1...50) {
+            var rng = SeededRandom(seed: UInt64(seed))
             let r = MatchEngine.simulate(
                 homeTeam: EngineTeam(name: "Home"),
                 awayTeam: EngineTeam(name: "Away"),
@@ -334,7 +367,7 @@ final class MatchEngineTests: XCTestCase {
         let homeIDs = lineupIDs(home)
         let awayIDs = lineupIDs(away)
 
-        var rng = SeededRandom(seed: 1)
+        var rng = SeededRandom(seed: UInt64(1))
         let r = MatchEngine.simulate(
             homeTeam: EngineTeam(name: "Home"),
             awayTeam: EngineTeam(name: "Away"),
@@ -356,8 +389,8 @@ final class MatchEngineTests: XCTestCase {
         let homeIDs = lineupIDs(home)
         let awayIDs = lineupIDs(away)
 
-        for seed: UInt64 in (1...20) {
-            var rng = SeededRandom(seed: seed)
+        for seed in (1...20) {
+            var rng = SeededRandom(seed: UInt64(seed))
             let r = MatchEngine.simulate(
                 homeTeam: EngineTeam(name: "Home"),
                 awayTeam: EngineTeam(name: "Away"),
@@ -374,8 +407,8 @@ final class MatchEngineTests: XCTestCase {
     func test_simulate_injuryProbability_zero_neverInjures() {
         let home = makeSquad(prefix: "H")
         let away = makeSquad(prefix: "A")
-        for seed: UInt64 in (1...30) {
-            var rng = SeededRandom(seed: seed)
+        for seed in (1...30) {
+            var rng = SeededRandom(seed: UInt64(seed))
             let r = MatchEngine.simulate(
                 homeTeam: EngineTeam(name: "Home"),
                 awayTeam: EngineTeam(name: "Away"),

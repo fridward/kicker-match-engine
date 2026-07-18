@@ -1,0 +1,4 @@
+# Skip configuration for MatchEngineTests — transpiliert die XCTest-Suite nach
+# Kotlin/JUnit, damit `skip test` die Paritätstests auf der JVM fährt.
+skip:
+  mode: 'transpiled'

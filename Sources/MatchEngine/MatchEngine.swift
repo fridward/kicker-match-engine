@@ -272,7 +272,7 @@ public enum MatchEngine {
         // schafft keine zusaetzlichen Torchancen. Sonst faende das Original-
         // Verhaeltnis von 32 Angriffen pro Spiel (BAS `@Ermittle_ergebnis(32)`)
         // nicht mehr statt und jedes Spiel bekaeme mehr Tore.
-        let stoppageMinutes = ticks <= 12 ? 0 : engineRandomIntClosed(1, 5, &rng)
+        let stoppageMinutes = ticks <= 12 ? 0 : Int.random(in: 1...5, using: &rng)
         let spanMinutes = regulationMinutes + stoppageMinutes
         let lastTick = max(1, ticks - 1)
 

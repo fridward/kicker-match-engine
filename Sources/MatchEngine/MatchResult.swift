@@ -35,16 +35,33 @@ public struct EngineGoalEvent: Codable, Equatable {
     /// Spielern in verschiedenen Vereinen.
     public let scorerID: UUID
     public let scorerName: String
+    /// Angezeigte Spielminute. In der Nachspielzeit bleibt sie auf 90 stehen,
+    /// der Zuschlag steckt in `stoppage`.
     public let minute: Int
+    /// Nachspielzeit-Zuschlag in Minuten; 0/nil = regulaer.
+    ///
+    /// OPTIONAL aus Kompatibilitaetsgruenden: Das Backend legt Tor-Events als
+    /// JSON in der Datenbank ab (`goalScorersJSON`). Alte Zeilen haben das Feld
+    /// nicht — als Optional decodiert `JSONDecoder` sie weiterhin fehlerfrei.
+    public let stoppage: Int?
     public let scoreAtTime: String
     public let isHome: Bool
 
-    public init(scorerID: UUID, scorerName: String, minute: Int, scoreAtTime: String, isHome: Bool) {
+    public init(scorerID: UUID, scorerName: String, minute: Int,
+                stoppage: Int? = nil, scoreAtTime: String, isHome: Bool) {
         self.scorerID = scorerID
         self.scorerName = scorerName
         self.minute = minute
+        self.stoppage = stoppage
         self.scoreAtTime = scoreAtTime
         self.isHome = isHome
+    }
+
+    /// EINE Quelle fuer die Minuten-Beschriftung, damit iOS, Android, Replay
+    /// und Kurier nicht je eigene Regeln erfinden: `"45"` bzw. `"90+3"`.
+    /// Der Punkt dahinter gehoert dem Aufrufer (mal `"45."`, mal `"45. MIN"`).
+    public var minuteLabel: String {
+        MatchEngine.minuteLabel(minute: minute, stoppage: stoppage)
     }
 }
 

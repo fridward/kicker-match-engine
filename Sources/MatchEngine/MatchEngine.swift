@@ -152,6 +152,13 @@ public enum MatchEngine {
         }
     }
 
+    /// Minuten-Beschriftung mit Nachspielzeit — `"45"` bzw. `"90+3"`.
+    /// Zentral hier, damit alle Oberflaechen identisch formatieren.
+    public static func minuteLabel(minute: Int, stoppage: Int?) -> String {
+        if let st = stoppage, st > 0 { return "\(minute)+\(st)" }
+        return "\(minute)"
+    }
+
     // MARK: - HalfResult (Output von Ermittle_ergebnis)
 
     public struct HalfResult: Equatable {
@@ -164,10 +171,18 @@ public enum MatchEngine {
         public init() {}
 
         public struct GoalMinute: Equatable {
+            /// Angezeigte Spielminute. In der Nachspielzeit bleibt sie auf 90
+            /// stehen, der Zuschlag steckt in `stoppage` — sonst kollidierte
+            /// ein 90+3-Tor (= Minute 93) mit der Verlaengerung, die ab
+            /// Minute 91 zaehlt.
             public let minute: Int
+            /// Nachspielzeit-Zuschlag in Minuten; 0 = regulaer.
+            /// Anzeige: `90+3.` statt `93.`
+            public let stoppage: Int
             public let isHome: Bool
-            public init(minute: Int, isHome: Bool) {
+            public init(minute: Int, stoppage: Int = 0, isHome: Bool) {
                 self.minute = minute
+                self.stoppage = stoppage
                 self.isHome = isHome
             }
         }
@@ -330,15 +345,45 @@ public enum MatchEngine {
         let bM  = b.midfield / 2
         let bA  = b.attack   / 2
 
-        // Tor-Minuten-Spreading (Tribute-Erweiterung — Original kennt nur Tor.A/Tor.B)
-        let minutesPerHalf = ticks <= 12 ? 15 : 45
-        let minuteStep = Double(minutesPerHalf) / Double(ticks)
+        // Tor-Minuten-Spreading (Tribute-Erweiterung — Original kennt nur
+        // Tor.A/Tor.B, keine Minuten).
+        //
+        // Die Tick-Zahl beschreibt einen ZEITRAUM AM STUECK, keine Halbzeit:
+        //   32 Ticks = 90 Minuten regulaere Spielzeit (BAS `@Ermittle_ergebnis(32)`)
+        //   12 Ticks = 15 Minuten Verlaengerungs-Halbzeit (BAS `(12)`)
+        //
+        // Frank-Bug 2026-09-01: hier stand 45 statt 90, die 32 Ticks wurden also
+        // in die erste Halbzeit gequetscht. Folge: JEDES Tor fiel zwischen
+        // Minute 1 und 44, in der zweiten Halbzeit fiel NIE eines — gemessen
+        // 4758 zu 0 ueber 2000 Spiele. Betraf alle Editionen, beide Plattformen,
+        // Solo wie Online, weil jeder Wettbewerb ueber diese eine Funktion laeuft.
+        //
+        // Die Ticks werden auf die RAENDER des Zeitraums verteilt: der erste
+        // Tick liegt auf der ersten Minute, der letzte auf der letzten. Vorher
+        // teilte `span / ticks` den Zeitraum so auf, dass die letzten Minuten
+        // nie erreicht wurden (bei 32 Ticks war in der 89. und 90. Minute nie
+        // ein Tor moeglich). Verlaengerung: 12 Ticks ueber Minute 91..105.
+        let regulationMinutes = ticks <= 12 ? 15 : 90
+        // Nachspielzeit (Frank-Wunsch 2026-09-01): 1..5 Minuten oben drauf,
+        // nur in der regulaeren Spielzeit. WICHTIG — die Tick-Zahl bleibt
+        // unveraendert bei 32: Die Nachspielzeit verlaengert den ZEITRAUM, sie
+        // schafft keine zusaetzlichen Torchancen. Sonst faende das Original-
+        // Verhaeltnis von 32 Angriffen pro Spiel (BAS `@Ermittle_ergebnis(32)`)
+        // nicht mehr statt und jedes Spiel bekaeme mehr Tore.
+        let stoppageMinutes = ticks <= 12 ? 0 : engineRandomIntClosed(1, 5, &rng)
+        let spanMinutes = regulationMinutes + stoppageMinutes
+        let lastTick = max(1, ticks - 1)
 
         // Tick-Loop (BAS:8010-8036)
         for i in 0..<ticks {
             let angriff = engineRandomInt(0..<antI, &rng)
             let attackerIsHome = angriff < antA
-            let minute = startMinute + Int(Double(i) * minuteStep) + 1
+            let rawMinute = startMinute + 1
+                + Int(Double(i) * Double(spanMinutes - 1) / Double(lastTick))
+            // Alles jenseits der regulaeren Spielzeit wird zu `90+x`.
+            let regulationEnd = startMinute + regulationMinutes
+            let minute = min(rawMinute, regulationEnd)
+            let stoppage = max(0, rawMinute - regulationEnd)
 
             if attackerIsHome {
                 result.homeAttempts += 1
@@ -347,7 +392,7 @@ public enum MatchEngine {
                     tor = aA + aM / 4 - bT * 3 / 2 + 75
                     if tor > engineRandomInt(0..<200, &rng) {
                         result.homeGoals += 1
-                        result.goalMinutes.append(HalfResult.GoalMinute(minute: minute, isHome: true))
+                        result.goalMinutes.append(HalfResult.GoalMinute(minute: minute, stoppage: stoppage, isHome: true))
                     }
                 }
             } else {
@@ -359,7 +404,7 @@ public enum MatchEngine {
                     tor = bA + bA / 4 - aT * 3 / 2 + 75
                     if tor > engineRandomInt(0..<200, &rng) {
                         result.awayGoals += 1
-                        result.goalMinutes.append(HalfResult.GoalMinute(minute: minute, isHome: false))
+                        result.goalMinutes.append(HalfResult.GoalMinute(minute: minute, stoppage: stoppage, isHome: false))
                     }
                 }
             }
@@ -434,7 +479,7 @@ public enum MatchEngine {
         // siehe `pickGoalScorer`).
         var homeTally = 0
         var awayTally = 0
-        for gm in outcome.goalMinutes.sorted(by: { $0.minute < $1.minute }) {
+        for gm in outcome.goalMinutes.sorted(by: { ($0.minute, $0.stoppage) < ($1.minute, $1.stoppage) }) {
             if gm.isHome { homeTally += 1 } else { awayTally += 1 }
             let scorer = gm.isHome
                 ? pickGoalScorer(from: homeLineupPlayers, using: &rng)
@@ -443,6 +488,7 @@ public enum MatchEngine {
                 scorerID: scorer.id,
                 scorerName: scorer.name,
                 minute: gm.minute,
+                stoppage: gm.stoppage > 0 ? gm.stoppage : nil,
                 scoreAtTime: "\(homeTally):\(awayTally)",
                 isHome: gm.isHome
             ))
@@ -516,7 +562,7 @@ public enum MatchEngine {
                 ticks: 12, startMinute: 90,
                 using: &rng
             )
-            for gm in et.goalMinutes.sorted(by: { $0.minute < $1.minute }) {
+            for gm in et.goalMinutes.sorted(by: { ($0.minute, $0.stoppage) < ($1.minute, $1.stoppage) }) {
                 if gm.isHome { homeTally += 1 } else { awayTally += 1 }
                 let scorer = gm.isHome
                     ? pickGoalScorer(from: homeLineupPlayers, using: &rng)
@@ -525,6 +571,7 @@ public enum MatchEngine {
                     scorerID: scorer.id,
                     scorerName: scorer.name,
                     minute: gm.minute,
+                    stoppage: gm.stoppage > 0 ? gm.stoppage : nil,
                     scoreAtTime: "\(homeTally):\(awayTally)",
                     isHome: gm.isHome
                 ))

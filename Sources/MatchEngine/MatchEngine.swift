@@ -820,4 +820,124 @@ public enum MatchEngine {
         default: return 1.0
         }
     }
+
+    // MARK: - K.-o.-Spiel mit Verlaengerung und Elfmeterschiessen
+    //
+    // Playoff-Serien (KICKER.BAS:3397-3511) und Relegationsspiele
+    // (KICKER.BAS:3514-3614) simuliert das Original ABSTRAKT: keine
+    // Aufstellung, keine Karten, keine Zuschauer — nur 90 Minuten auf den
+    // aggregierten Mannschaftswerten, bei Bedarf Verlaengerung und Elfmeter.
+    // Solo tut das seit jeher (`Cup.simulateCupMatch`); damit Online nicht
+    // danebenlaeuft, steht die Komposition hier einmal fuer beide.
+    //
+    // Der Typ liegt im Enum-Rumpf, nicht in einer Extension: Kotlin kann
+    // einem Typ per Extension keinen verschachtelten Typ geben, und statische
+    // Member einer Extension landen nicht in der skipcode.json (2026-09-22).
+
+    /// Ausgang eines einzelnen K.-o.-Spiels.
+    public struct KnockoutLegResult {
+        /// Endstand inklusive Verlaengerung und — falls noetig — der im
+        /// Elfmeterschiessen verwandelten Schuesse. Das Original zaehlt die
+        /// Elfer in dieser Sub-Simulation auf den Spielstand (KICKER.BAS:3466).
+        public let homeGoals: Int
+        public let awayGoals: Int
+        /// Stand nach 90 Minuten — fuer Anzeigen, die „n.V." schreiben wollen.
+        public let regularHomeGoals: Int
+        public let regularAwayGoals: Int
+        public let wentToExtraTime: Bool
+        public let wentToPenalties: Bool
+
+        public init(homeGoals: Int, awayGoals: Int,
+                    regularHomeGoals: Int, regularAwayGoals: Int,
+                    wentToExtraTime: Bool, wentToPenalties: Bool) {
+            self.homeGoals = homeGoals
+            self.awayGoals = awayGoals
+            self.regularHomeGoals = regularHomeGoals
+            self.regularAwayGoals = regularAwayGoals
+            self.wentToExtraTime = wentToExtraTime
+            self.wentToPenalties = wentToPenalties
+        }
+    }
+
+    /// Ein K.-o.-Spiel auf aggregierten Mannschaftswerten.
+    /// `tieBreak == false` laesst ein Unentschieden stehen (Playoff-Spiel 1-4,
+    /// Relegationsspiel 1-2 — dort entscheidet erst die Serie bzw. das
+    /// Aggregat). `tieBreak == true` erzwingt einen Sieger ueber
+    /// Verlaengerung (12 Ticks ab Minute 90) und danach Elfmeterschiessen.
+    public static func playKnockoutLeg<R: RandomNumberGenerator>(
+        _ home: TeamSkills,
+        _ away: TeamSkills,
+        tieBreak: Bool,
+        using rng: inout R
+    ) -> KnockoutLegResult {
+        let reg = ermittleErgebnis(home, away, ticks: 32, startMinute: 0, using: &rng)
+        let regHome = reg.homeGoals
+        let regAway = reg.awayGoals
+        var hg = regHome
+        var ag = regAway
+        var extraTime = false
+        var penalties = false
+
+        if tieBreak && hg == ag {
+            extraTime = true
+            let et = ermittleErgebnis(home, away, ticks: 12, startMinute: 90, using: &rng)
+            hg += et.homeGoals
+            ag += et.awayGoals
+            if hg == ag {
+                penalties = true
+                let pen = knockoutPenalties(using: &rng)
+                hg += pen.home
+                ag += pen.away
+            }
+        }
+
+        return KnockoutLegResult(
+            homeGoals: hg, awayGoals: ag,
+            regularHomeGoals: regHome, regularAwayGoals: regAway,
+            wentToExtraTime: extraTime, wentToPenalties: penalties
+        )
+    }
+
+    /// Elfmeterschiessen der Sub-Simulation — 75 % Trefferquote
+    /// (KICKER.BAS:3257-3262 `Random(4)>0`), fuenf Schuesse je Seite mit
+    /// Abbruch sobald der Vorsprung uneinholbar ist, danach Sudden Death
+    /// Paar fuer Paar. Liefert nur die Trefferzahlen — die Schussfolge
+    /// braucht diese Sub-Simulation nicht (kein Visualisierungs-Pfad).
+    private static func knockoutPenalties<R: RandomNumberGenerator>(
+        using rng: inout R
+    ) -> (home: Int, away: Int) {
+        var home = 0
+        var away = 0
+        var hTaken = 0
+        var aTaken = 0
+        let maxRegular = 5
+
+        // Kein `while ... { if decided { break } }` mit Label: Skip uebersetzt
+        // benannte Schleifen nicht zuverlaessig — deshalb ein Flag.
+        var decided = false
+        while (hTaken < maxRegular || aTaken < maxRegular) && !decided {
+            if hTaken < maxRegular {
+                if engineRandomInt(0..<4, &rng) > 0 { home += 1 }
+                hTaken += 1
+            }
+            if !decided && aTaken < maxRegular {
+                if engineRandomInt(0..<4, &rng) > 0 { away += 1 }
+                aTaken += 1
+            }
+            let hLeft = max(0, maxRegular - hTaken)
+            let aLeft = max(0, maxRegular - aTaken)
+            if home > away + aLeft { decided = true }
+            if away > home + hLeft { decided = true }
+        }
+
+        // Sudden Death: Paar fuer Paar, bis eines ungleich ausgeht.
+        while home == away {
+            let h = engineRandomInt(0..<4, &rng) > 0
+            let a = engineRandomInt(0..<4, &rng) > 0
+            if h { home += 1 }
+            if a { away += 1 }
+        }
+
+        return (home, away)
+    }
 }

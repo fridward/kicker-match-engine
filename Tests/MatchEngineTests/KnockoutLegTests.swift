@@ -19,8 +19,8 @@ final class KnockoutLegTests: XCTestCase {
     /// Reproduzierbar: derselbe Seed, dasselbe Ergebnis. Ein Cheat-Sprung
     /// oder ein wiederholter Spieltag darf nicht wuerfeln.
     func test_gleicherSeed_gleichesErgebnis() {
-        var r1 = SeededRandom(seed: 4711)
-        var r2 = SeededRandom(seed: 4711)
+        var r1 = SeededRandom(seed: UInt64(4711))
+        var r2 = SeededRandom(seed: UInt64(4711))
         let a = MatchEngine.playKnockoutLeg(skills(60), skills(55), tieBreak: true, using: &r1)
         let b = MatchEngine.playKnockoutLeg(skills(60), skills(55), tieBreak: true, using: &r2)
         XCTAssertEqual(a.homeGoals, b.homeGoals)

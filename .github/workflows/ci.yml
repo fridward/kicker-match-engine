@@ -1,15 +1,27 @@
 name: CI
 
+# Mac-Minuten zählen bei GitHub zehnfach: reine Doku-Änderungen lösen keinen
+# Lauf aus, und ein neuer Push bricht den noch laufenden Lauf ab.
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # match-engine ist self-contained (nur skip.tools-Deps, keine lokalen
 # Nachbar-Pakete) → standalone testbar. Skip erzwingt macOS-Runner.
 jobs:
   test:
+    if: github.event.pull_request.draft != true
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

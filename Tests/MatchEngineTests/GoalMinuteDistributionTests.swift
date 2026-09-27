@@ -18,7 +18,7 @@ final class GoalMinuteDistributionTests: XCTestCase {
     func testGoalsFallInBothHalves() {
         var firstHalf = 0
         var secondHalf = 0
-        var rng = SeededRandom(seed: 4711)
+        var rng = SeededRandom(seed: UInt64(4711))
         for _ in 0..<2000 {
             let r = MatchEngine.ermittleErgebnis(skills, skills, ticks: 32,
                                                  startMinute: 0, using: &rng)
@@ -38,7 +38,7 @@ final class GoalMinuteDistributionTests: XCTestCase {
     func testRegulationSpansFullMatch() {
         var maxMinute = 0
         var minMinute = 999
-        var rng = SeededRandom(seed: 99)
+        var rng = SeededRandom(seed: UInt64(99))
         for _ in 0..<2000 {
             let r = MatchEngine.ermittleErgebnis(skills, skills, ticks: 32,
                                                  startMinute: 0, using: &rng)
@@ -53,7 +53,7 @@ final class GoalMinuteDistributionTests: XCTestCase {
 
     /// Verlaengerung: 12 Ticks = 15 Minuten, ab Minute 90.
     func testExtraTimeStaysInItsWindow() {
-        var rng = SeededRandom(seed: 7)
+        var rng = SeededRandom(seed: UInt64(7))
         var sawGoal = false
         for _ in 0..<2000 {
             let r = MatchEngine.ermittleErgebnis(skills, skills, ticks: 12,
@@ -71,7 +71,7 @@ final class GoalMinuteDistributionTests: XCTestCase {
     /// tragen den Zuschlag in `stoppage` — sonst kollidierten sie mit der
     /// Verlaengerung, die ab Minute 91 zaehlt (Frank-Wunsch 2026-09-01).
     func testStoppageTimeGoalsStayAtMinute90() {
-        var rng = SeededRandom(seed: 2024)
+        var rng = SeededRandom(seed: UInt64(2024))
         var sawStoppage = false
         var maxStoppage = 0
         for _ in 0..<3000 {
@@ -93,7 +93,7 @@ final class GoalMinuteDistributionTests: XCTestCase {
     /// Die Verlaengerung kennt KEINE Nachspielzeit — ihre Minuten zaehlen
     /// normal weiter (91..105).
     func testExtraTimeHasNoStoppage() {
-        var rng = SeededRandom(seed: 31)
+        var rng = SeededRandom(seed: UInt64(31))
         for _ in 0..<1000 {
             let r = MatchEngine.ermittleErgebnis(skills, skills, ticks: 12,
                                                  startMinute: 90, using: &rng)
@@ -106,7 +106,7 @@ final class GoalMinuteDistributionTests: XCTestCase {
     /// Nachspielzeit schafft KEINE zusaetzlichen Torchancen — die Tick-Zahl
     /// bleibt bei 32, sonst bekaeme jedes Spiel mehr Tore als im Original.
     func testStoppageDoesNotIncreaseChances() {
-        var rng = SeededRandom(seed: 5)
+        var rng = SeededRandom(seed: UInt64(5))
         for _ in 0..<200 {
             let r = MatchEngine.ermittleErgebnis(skills, skills, ticks: 32,
                                                  startMinute: 0, using: &rng)

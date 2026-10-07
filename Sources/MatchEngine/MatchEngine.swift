@@ -279,6 +279,24 @@ public enum MatchEngine {
         return "\(minute)"
     }
 
+    // MARK: - SkillPhase (Tribute: Platzverweis schwächt das Team)
+
+    /// Teamstärke AB einer Spielminute — nur Tribute (`cardImpact`). Nach
+    /// einer Roten oder Gelb-Roten Karte spielt das Team ab der Minute des
+    /// Platzverweises mit den Werten OHNE den Spieler weiter (Summen pro
+    /// Position wie `aggregateTeamSkills`). Bewusste Abweichung vom Original
+    /// (dort steht das Ergebnis vor den Karten fest, KICKER.BAS:2250 vs.
+    /// 2639-2707) — Frank-Entscheid 2026-10-07.
+    public struct SkillPhase: Equatable {
+        /// Gilt für alle Ticks mit Spielminute > `afterMinute`.
+        public var afterMinute: Int
+        public var skills: TeamSkills
+        public init(afterMinute: Int, skills: TeamSkills) {
+            self.afterMinute = afterMinute
+            self.skills = skills
+        }
+    }
+
     // MARK: - HalfResult (Output von Ermittle_ergebnis)
 
     public struct HalfResult: Equatable {
@@ -441,6 +459,8 @@ public enum MatchEngine {
         ticks: Int,
         startMinute: Int,
         isUefaAway: Bool = false,
+        homePhases: [SkillPhase] = [],
+        awayPhases: [SkillPhase] = [],
         using rng: inout R
     ) -> HalfResult {
         var result = HalfResult()
@@ -452,18 +472,22 @@ public enum MatchEngine {
         var antB = b.moral * 3 / 2 + b.zusammenspiel + b.kondition + b.midfield * 7
         antA = max(1, antA)
         antB = max(1, antB)
-        let antI = antA + antB
+        var antI = antA + antB
 
         // „Normung auf 50" (BAS:8006-8009). Halbierung NUR auf den lokalen
         // Skill-Vars für die Tor-Würfel — Possession-Werte oben bleiben.
-        let aT  = a.torwart  / 2
-        let aV  = a.defense  / 2
-        let aM  = a.midfield / 2
-        let aA  = a.attack   / 2
-        let bT  = b.torwart  / 2
-        let bV  = b.defense  / 2
-        let bM  = b.midfield / 2
-        let bA  = b.attack   / 2
+        var aT  = a.torwart  / 2
+        var aV  = a.defense  / 2
+        var aM  = a.midfield / 2
+        var aA  = a.attack   / 2
+        var bT  = b.torwart  / 2
+        var bV  = b.defense  / 2
+        var bM  = b.midfield / 2
+        var bA  = b.attack   / 2
+        // Tribute-Platzverweise: aktuell gültige Phase je Team (-1 = Basis).
+        // Ohne Phasen bleibt die Schleife unverändert (Klassik/PLUS bitgenau).
+        var homePhaseIdx = -1
+        var awayPhaseIdx = -1
 
         // Tor-Minuten-Spreading (Tribute-Erweiterung — Original kennt nur
         // Tor.A/Tor.B, keine Minuten).
@@ -496,10 +520,29 @@ public enum MatchEngine {
 
         // Tick-Loop (BAS:8010-8036)
         for i in 0..<ticks {
-            let angriff = engineRandomInt(0..<antI, &rng)
-            let attackerIsHome = angriff < antA
             let rawMinute = startMinute + 1
                 + Int(Double(i) * Double(spanMinutes - 1) / Double(lastTick))
+            if !homePhases.isEmpty || !awayPhases.isEmpty {
+                // Tribute: ab der Minute des Platzverweises zählen die Werte
+                // ohne den Spieler (SkillPhase). Kein RNG-Verbrauch.
+                var hIdx = -1
+                for (k, ph) in homePhases.enumerated() where rawMinute > ph.afterMinute { hIdx = k }
+                var aIdx = -1
+                for (k, ph) in awayPhases.enumerated() where rawMinute > ph.afterMinute { aIdx = k }
+                if hIdx != homePhaseIdx || aIdx != awayPhaseIdx {
+                    homePhaseIdx = hIdx
+                    awayPhaseIdx = aIdx
+                    let ea = hIdx >= 0 ? homePhases[hIdx].skills : a
+                    let eb = aIdx >= 0 ? awayPhases[aIdx].skills : b
+                    antA = max(1, ea.moral * 3 / 2 + ea.zusammenspiel + ea.kondition + ea.midfield * 7 + heimvorteil)
+                    antB = max(1, eb.moral * 3 / 2 + eb.zusammenspiel + eb.kondition + eb.midfield * 7)
+                    antI = antA + antB
+                    aT = ea.torwart / 2; aV = ea.defense / 2; aM = ea.midfield / 2; aA = ea.attack / 2
+                    bT = eb.torwart / 2; bV = eb.defense / 2; bM = eb.midfield / 2; bA = eb.attack / 2
+                }
+            }
+            let angriff = engineRandomInt(0..<antI, &rng)
+            let attackerIsHome = angriff < antA
             // Alles jenseits der regulaeren Spielzeit wird zu `90+x`.
             let regulationEnd = startMinute + regulationMinutes
             let minute = min(rawMinute, regulationEnd)
@@ -554,6 +597,7 @@ public enum MatchEngine {
         awaySkillsOverride: TeamSkills? = nil,
         extraTimeOnDraw: Bool = false,
         injuryProbabilityPercent: Int = 15,
+        cardImpact: Bool = false,
         using rng: inout R
     ) -> EngineMatchResult {
         var result = EngineMatchResult(
@@ -578,22 +622,50 @@ public enum MatchEngine {
         applyTactic(&homeSkills, tactic: homeTactic)
         applyTactic(&awaySkills, tactic: awayTactic)
 
-        // 32 Ticks = 90 Minuten (BAS: @Ermittle_ergebnis(32))
-        let outcome = ermittleErgebnis(
-            homeSkills, awaySkills,
-            ticks: 32, startMinute: 0,
-            using: &rng
-        )
-        result.homeGoals = outcome.homeGoals
-        result.awayGoals = outcome.awayGoals
-
         // Aufgestellte ermitteln — `pickGoalScorer` und der Karten-Pool
         // operieren AUF DER AUFSTELLUNG (KICKER.BAS:9438 `Pl.info(A,15)=1`).
         // Frank-Bug 2026-05-09: vorher reichten wir `homePlayers/awayPlayers`
         // (Gesamtkader) ins `pickGoalScorer`, deshalb konnten Reserve-Spieler
         // Tore schießen, die gar nicht im Lineup standen.
+        // (Pure, kein RNG — darf vor der Ergebnis-Würfelung stehen.)
         let homeLineupPlayers = pickLineup(from: homePlayers, lineupIDs: homeLineup)
         let awayLineupPlayers = pickLineup(from: awayPlayers, lineupIDs: awayLineup)
+
+        // Tribute (`cardImpact`, Frank-Entscheid 2026-10-07): Karten VOR dem
+        // Ergebnis würfeln, damit ein Platzverweis (Rot/Gelb-Rot) das Team ab
+        // seiner Minute schwächt. Klassik/PLUS: Karten wie im Original NACH
+        // dem Ergebnis (KICKER.BAS:2250 → 2639-2707), RNG-Folge unverändert.
+        var homePhases: [SkillPhase] = []
+        var awayPhases: [SkillPhase] = []
+        var sentOffMinute: [UUID: Int] = [:]
+        if cardImpact {
+            let cards = rollImpactCards(
+                homeOnField: homeLineupPlayers.filter { $0.position != EnginePosition.goalkeeper },
+                awayOnField: awayLineupPlayers.filter { $0.position != EnginePosition.goalkeeper },
+                homeTeamName: homeTeam.name, awayTeamName: awayTeam.name, using: &rng)
+            result.yellowCards = cards.yellow
+            result.redCards = cards.red
+            for c in cards.red { sentOffMinute[c.playerID] = c.minute }
+            let homeIDs = Set(homeLineupPlayers.map { $0.id })
+            homePhases = dismissalPhases(
+                lineup: homeLineupPlayers, dismissals: cards.red.filter { homeIDs.contains($0.playerID) },
+                override: homeSkillsOverride, teamMoral: homeTeam.moral ?? 50,
+                teamZusammenspiel: homeTeam.zusammenspiel ?? 50, tactic: homeTactic)
+            awayPhases = dismissalPhases(
+                lineup: awayLineupPlayers, dismissals: cards.red.filter { !homeIDs.contains($0.playerID) },
+                override: awaySkillsOverride, teamMoral: awayTeam.moral ?? 50,
+                teamZusammenspiel: awayTeam.zusammenspiel ?? 50, tactic: awayTactic)
+        }
+
+        // 32 Ticks = 90 Minuten (BAS: @Ermittle_ergebnis(32))
+        let outcome = ermittleErgebnis(
+            homeSkills, awaySkills,
+            ticks: 32, startMinute: 0,
+            homePhases: homePhases, awayPhases: awayPhases,
+            using: &rng
+        )
+        result.homeGoals = outcome.homeGoals
+        result.awayGoals = outcome.awayGoals
 
         // Schützen aus der Aufstellung wählen (Original-Gewicht
         // siehe `pickGoalScorer`).
@@ -601,9 +673,10 @@ public enum MatchEngine {
         var awayTally = 0
         for gm in outcome.goalMinutes.sorted(by: { ($0.minute, $0.stoppage) < ($1.minute, $1.stoppage) }) {
             if gm.isHome { homeTally += 1 } else { awayTally += 1 }
+            // Tribute: wer schon vom Platz ist, trifft nicht mehr.
             let scorer = gm.isHome
-                ? pickGoalScorer(from: homeLineupPlayers, using: &rng)
-                : pickGoalScorer(from: awayLineupPlayers, using: &rng)
+                ? pickGoalScorer(from: stillOnPitch(homeLineupPlayers, minute: gm.minute, sentOffMinute: sentOffMinute), using: &rng)
+                : pickGoalScorer(from: stillOnPitch(awayLineupPlayers, minute: gm.minute, sentOffMinute: sentOffMinute), using: &rng)
             result.goalScorers.append(EngineGoalEvent(
                 scorerID: scorer.id,
                 scorerName: scorer.name,
@@ -617,6 +690,8 @@ public enum MatchEngine {
         // Karten (KICKER.BAS:2639/2705) — nur Feldspieler aus dem Lineup
         let homeOnField = homeLineupPlayers.filter { $0.position != EnginePosition.goalkeeper }
         let awayOnField = awayLineupPlayers.filter { $0.position != EnginePosition.goalkeeper }
+
+        if !cardImpact {
 
         // D-4: 0..<N Range (Original GFA `Random(N)` = 0..N-1).
         // Gelb total: A% = Random(40)^(1/3) + 2 - Sqr(Random(9))
@@ -650,6 +725,7 @@ public enum MatchEngine {
         appendUniqueCards(count: redAway, from: awayOnField,
                           into: &result.redCards, bookedIDs: &bookedIDs,
                           isRed: true, teamName: awayTeam.name, using: &rng)
+        }
 
         // Verletzung (KICKER.BAS:3933-3947). Default 15% pro Match
         // (= Original-Wert, keine Edition-Skalierung — D-3-Fix).
@@ -680,13 +756,14 @@ public enum MatchEngine {
             let et = ermittleErgebnis(
                 homeSkills, awaySkills,
                 ticks: 12, startMinute: 90,
+                homePhases: homePhases, awayPhases: awayPhases,
                 using: &rng
             )
             for gm in et.goalMinutes.sorted(by: { ($0.minute, $0.stoppage) < ($1.minute, $1.stoppage) }) {
                 if gm.isHome { homeTally += 1 } else { awayTally += 1 }
                 let scorer = gm.isHome
-                    ? pickGoalScorer(from: homeLineupPlayers, using: &rng)
-                    : pickGoalScorer(from: awayLineupPlayers, using: &rng)
+                    ? pickGoalScorer(from: stillOnPitch(homeLineupPlayers, minute: gm.minute, sentOffMinute: sentOffMinute), using: &rng)
+                    : pickGoalScorer(from: stillOnPitch(awayLineupPlayers, minute: gm.minute, sentOffMinute: sentOffMinute), using: &rng)
                 result.goalScorers.append(EngineGoalEvent(
                     scorerID: scorer.id,
                     scorerName: scorer.name,
@@ -704,6 +781,132 @@ public enum MatchEngine {
     }
 
     // MARK: - Helpers
+
+    /// Ergebnis von `rollImpactCards` (Struct statt Tupel — Skip).
+    struct ImpactCards {
+        var yellow: [EngineCardEvent] = []
+        var red: [EngineCardEvent] = []
+    }
+
+    /// Tribute-Karten VOR dem Ergebnis (`cardImpact`). Anzahlen mit den
+    /// Original-Formeln (KICKER.BAS:2639-2641 Gelb, 2705-2707 Rot), gleiche
+    /// Würfel-Reihenfolge wie `simulate`. Unterschied zum Original: eine Gelbe
+    /// darf einen schon verwarnten Spieler treffen — das ist Gelb-Rot in einer
+    /// späteren Minute (Frank-Entscheid 2026-10-07). Rote zuerst und je
+    /// Spieler höchstens eine Karte-mit-Platzverweis.
+    static func rollImpactCards<R: RandomNumberGenerator>(
+        homeOnField: [EnginePlayer],
+        awayOnField: [EnginePlayer],
+        homeTeamName: String,
+        awayTeamName: String,
+        using rng: inout R
+    ) -> ImpactCards {
+        let totalYellow = max(0,
+            Int(pow(Double(engineRandomInt(0..<40, &rng)), 1.0 / 3.0))
+            + 2
+            - Int(engineSqrt(Double(engineRandomInt(0..<9, &rng))))
+        )
+        let yellowHome = totalYellow > 0 ? engineRandomIntClosed(0, totalYellow, &rng) : 0
+        let yellowAway = totalYellow - yellowHome
+        let totalRed = max(0,
+            3 - Int(engineSqrt(engineSqrt(Double(engineRandomInt(0..<230, &rng) + 1))))
+        )
+        let redHome = totalRed > 0 ? engineRandomIntClosed(0, totalRed, &rng) : 0
+        let redAway = totalRed - redHome
+
+        var cards = ImpactCards()
+        var sentOff: Set<UUID> = []
+        // Glatt Rot (distinkt, wie appendUniqueCards).
+        let redPlan = [redHome, redAway]
+        let pools = [homeOnField, awayOnField]
+        let names = [homeTeamName, awayTeamName]
+        for t in 0..<2 {
+            guard redPlan[t] > 0, !pools[t].isEmpty else { continue }
+            for p in engineShuffled(pools[t], &rng).prefix(redPlan[t]) {
+                cards.red.append(EngineCardEvent(
+                    playerID: p.id, playerName: p.name, isRed: true,
+                    teamName: names[t], minute: engineRandomIntClosed(5, 90, &rng)))
+                sentOff.insert(p.id)
+            }
+        }
+        // Gelb mit Zurücklegen: zweite Gelbe für denselben Spieler = Gelb-Rot.
+        let yellowPlan = [yellowHome, yellowAway]
+        for t in 0..<2 {
+            var firstMinute: [UUID: Int] = [:]
+            var k = 0
+            while k < yellowPlan[t] {
+                k += 1
+                let cand = pools[t].filter { !sentOff.contains($0.id) }
+                guard !cand.isEmpty, let idx = engineRandomIndex(cand.count, &rng) else { break }
+                let p = cand[idx]
+                if let first = firstMinute[p.id] {
+                    guard first < 90 else { continue }
+                    cards.red.append(EngineCardEvent(
+                        playerID: p.id, playerName: p.name, isRed: true,
+                        teamName: names[t], minute: engineRandomIntClosed(first + 1, 90, &rng),
+                        isSecondYellow: true))
+                    sentOff.insert(p.id)
+                } else {
+                    let m = engineRandomIntClosed(5, 89, &rng)
+                    firstMinute[p.id] = m
+                    cards.yellow.append(EngineCardEvent(
+                        playerID: p.id, playerName: p.name, isRed: false,
+                        teamName: names[t], minute: m))
+                }
+            }
+        }
+        return cards
+    }
+
+    /// Stärke-Phasen nach Platzverweisen (`cardImpact`): pro Platzverweis die
+    /// Teamwerte OHNE die bis dahin vom Platz gestellten Spieler — exakt wie
+    /// `aggregateTeamSkills` (Summen pro Position, KICKER.BAS:Suche_awert),
+    /// danach Taktik. Bei vorgegebenen Werten (Override, z. B. KI-Momentauf-
+    /// nahme ohne Kader) anteilig (11−n)/11 auf Kondition/Abwehr/Mittelfeld/
+    /// Angriff.
+    static func dismissalPhases(
+        lineup: [EnginePlayer],
+        dismissals: [EngineCardEvent],
+        override: TeamSkills?,
+        teamMoral: Int,
+        teamZusammenspiel: Int,
+        tactic: Int
+    ) -> [SkillPhase] {
+        var phases: [SkillPhase] = []
+        var removed: Set<UUID> = []
+        for c in dismissals.sorted(by: { $0.minute < $1.minute }) {
+            removed.insert(c.playerID)
+            var sk: TeamSkills
+            if let o = override {
+                let left = max(0, 11 - removed.count)
+                sk = o
+                sk.kondition = sk.kondition * left / 11
+                sk.defense = sk.defense * left / 11
+                sk.midfield = sk.midfield * left / 11
+                sk.attack = sk.attack * left / 11
+            } else {
+                let rest = lineup.filter { !removed.contains($0.id) }
+                sk = aggregateTeamSkills(players: rest, lineupIDs: Set(rest.map { $0.id }),
+                                         teamMoral: teamMoral, teamZusammenspiel: teamZusammenspiel)
+            }
+            applyTactic(&sk, tactic: tactic)
+            phases.append(SkillPhase(afterMinute: c.minute, skills: sk))
+        }
+        return phases
+    }
+
+    /// Aufgestellte, die in `minute` noch auf dem Platz stehen (Tribute).
+    /// Ohne Platzverweise = unverändert die Aufstellung. Leerer Pool →
+    /// Aufstellung (Sicherheitsnetz, sollte nie greifen).
+    static func stillOnPitch(_ lineup: [EnginePlayer], minute: Int,
+                             sentOffMinute: [UUID: Int]) -> [EnginePlayer] {
+        guard !sentOffMinute.isEmpty else { return lineup }
+        let pool = lineup.filter { p in
+            guard let off = sentOffMinute[p.id] else { return true }
+            return off >= minute
+        }
+        return pool.isEmpty ? lineup : pool
+    }
 
     /// `count` distinkte Spieler ziehen, jeweils eine Karte vergeben.
     /// `bookedIDs` wird über alle Vergaben eines Matches geteilt.

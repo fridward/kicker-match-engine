@@ -73,13 +73,20 @@ public struct EngineCardEvent: Codable, Equatable {
     /// Spielminute der Karte (5..90). Original trackt das nicht akkurat;
     /// für den Replay-Ticker ist eine plausible Minute nötig.
     public let minute: Int
+    /// Gelb-Rot (nur Tribute, `cardImpact`): Platzverweis durch die zweite
+    /// Gelbe Karte. Steht in `redCards`; die erste Gelbe bleibt in
+    /// `yellowCards`. Sperre 1 Spieltag statt Rot-Sperre. nil/false = normal.
+    /// Optional, damit ältere JSON-Stände ohne das Feld dekodieren.
+    public let isSecondYellow: Bool?
 
-    public init(playerID: UUID, playerName: String, isRed: Bool, teamName: String, minute: Int = 0) {
+    public init(playerID: UUID, playerName: String, isRed: Bool, teamName: String, minute: Int = 0,
+                isSecondYellow: Bool? = nil) {
         self.playerID = playerID
         self.playerName = playerName
         self.isRed = isRed
         self.teamName = teamName
         self.minute = minute
+        self.isSecondYellow = isSecondYellow
     }
 }
 

@@ -13,6 +13,12 @@
 // Commit (siehe kicker-backend/Package.swift), damit das Skip-Toolchain-
 // Dependency NICHT in den Linux/Docker-Build leckt.
 import PackageDescription
+
+// Android-Prebuild von Skip (`swift build`, seit Xcode 27/SwiftPM 6.4) bricht
+// bei dynamischen Produkten am Diamond-Fehler ab („linked as a static library
+// … duplication of library code“). kicker-android/build.sh setzt dafür
+// KICKER_SKIP_PREBUILD=1; Xcode baut die iOS-App weiter dynamisch.
+let kickerLibraryType: Product.Library.LibraryType? = Context.environment["KICKER_SKIP_PREBUILD"] == "1" ? nil : .dynamic
 import Foundation
 
 // Kotlin/Skip-Paritätstests sind OPT-IN: nur mit `SKIP_PARITY=1 swift test`
@@ -42,7 +48,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "MatchEngine", type: .dynamic, targets: ["MatchEngine"])
+        .library(name: "MatchEngine", type: kickerLibraryType, targets: ["MatchEngine"])
     ],
     dependencies: [
         .package(url: "https://source.skip.tools/skip.git", from: "1.9.2"),

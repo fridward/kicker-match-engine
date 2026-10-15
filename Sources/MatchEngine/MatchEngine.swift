@@ -333,14 +333,16 @@ public enum MatchEngine {
         let minimum: [(EnginePosition, Int)] = [(.defender, 3), (.midfielder, 3), (.forward, 2)]
         for (pos, count) in minimum {
             for p in field.filter({ $0.position == pos }).prefix(count) {
-                picked.append(p)
                 chosen.insert(p.id)
             }
         }
-        let rest = field
-            .filter { !chosen.contains($0.id) }
-            .prefix(Swift.max(0, 11 - picked.count))
-        picked.append(contentsOf: rest)
+        for p in field where !chosen.contains(p.id) && chosen.count < 11 - picked.count {
+            chosen.insert(p.id)
+        }
+        // Reihenfolge wie bisher (nach Gesamtstärke): die Torschützen-Wahl
+        // streut über die Reihenfolge — bei unveränderter Auswahl bleiben
+        // Spiele mit festem Seed so identisch.
+        picked.append(contentsOf: field.filter { chosen.contains($0.id) })
         return picked
     }
 

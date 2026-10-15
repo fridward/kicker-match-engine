@@ -169,6 +169,30 @@ final class MatchEngineTests: XCTestCase {
         XCTAssertEqual(picked.first { $0.position == .goalkeeper }?.name, "H-GK1")
     }
 
+    /// Frank 2026-10-15: Auto-Elf positionsgerecht (min. 3 V / 3 M / 2 A),
+    /// auch wenn die Stürmer die stärksten Feldspieler sind.
+    func test_pickLineup_autoPick_keepsMinimumFormation() {
+        var squad: [EnginePlayer] = []
+        squad.append(.init(name: "GK", position: .goalkeeper, skillT: 5, skillV: 0, skillM: 0, skillA: 0))
+        for i in 0..<4 { squad.append(.init(name: "V\(i)", position: .defender, skillT: 0, skillV: 2, skillM: 0, skillA: 0)) }
+        for i in 0..<4 { squad.append(.init(name: "M\(i)", position: .midfielder, skillT: 0, skillV: 0, skillM: 3, skillA: 0)) }
+        for i in 0..<8 { squad.append(.init(name: "A\(i)", position: .forward, skillT: 0, skillV: 0, skillM: 0, skillA: 9)) }
+        let picked = MatchEngine.pickLineup(from: squad, lineupIDs: nil)
+        XCTAssertEqual(picked.count, 11)
+        XCTAssertEqual(picked.filter { $0.position == .goalkeeper }.count, 1)
+        XCTAssertGreaterThanOrEqual(picked.filter { $0.position == .defender }.count, 3)
+        XCTAssertGreaterThanOrEqual(picked.filter { $0.position == .midfielder }.count, 3)
+        XCTAssertGreaterThanOrEqual(picked.filter { $0.position == .forward }.count, 2)
+    }
+
+    /// Fehlt eine Position, wird mit den übrigen auf 11 aufgefüllt.
+    func test_pickLineup_autoPick_fillsWhenPositionMissing() {
+        var squad: [EnginePlayer] = []
+        squad.append(.init(name: "GK", position: .goalkeeper, skillT: 5, skillV: 0, skillM: 0, skillA: 0))
+        for i in 0..<12 { squad.append(.init(name: "M\(i)", position: .midfielder, skillT: 0, skillV: 0, skillM: 3, skillA: 0)) }
+        XCTAssertEqual(MatchEngine.pickLineup(from: squad, lineupIDs: nil).count, 11)
+    }
+
     func test_pickLineup_explicitLineup_returnsOnlyThose() {
         let squad = makeSquad(prefix: "H")
         let ids = Set(squad.prefix(11).map(\.id))

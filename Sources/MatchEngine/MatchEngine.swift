@@ -407,8 +407,13 @@ public enum MatchEngine {
             return available.filter { ids.contains($0.id) }
         }
 
-        // Kein explizites Lineup übergeben → Auto-Top-11 als
-        // Default-Aufstellung (Solo-Fallback bei fehlender Aufstellung).
+        // Kein explizites Lineup übergeben → positionsgerechte Auto-Elf
+        // (Computer-Vereine, Solo-Fallback). Bester Torwart, dann je Position
+        // die Stärksten bis zur Mindestbesetzung 3 V / 3 M / 2 A, die übrigen
+        // zwei Plätze nach Gesamtstärke. Fehlt eine Position, rücken andere
+        // nach. Frank 2026-10-15: vorher „die 10 Stärksten egal wo" — die KI
+        // spielte z. B. mit 1 Verteidiger und 6 Stürmern, und die
+        // Aufstellungsbewertung zeigte „sehr schwach" in der Abwehr.
         var picked: [EnginePlayer] = []
         if let bestGK = available
             .filter({ $0.position == EnginePosition.goalkeeper })
@@ -417,11 +422,25 @@ public enum MatchEngine {
         {
             picked.append(bestGK)
         }
-        let remaining = available
+        let field = available
             .filter { $0.position != EnginePosition.goalkeeper }
             .sorted { $0.overallSkill > $1.overallSkill }
-            .prefix(11 - picked.count)
-        picked.append(contentsOf: remaining)
+        var chosen = Set<UUID>()
+        let minimum: [(EnginePosition, Int)] = [
+            (EnginePosition.defender, 3), (EnginePosition.midfielder, 3), (EnginePosition.forward, 2),
+        ]
+        for (pos, count) in minimum {
+            for p in field.filter({ $0.position == pos }).prefix(count) {
+                chosen.insert(p.id)
+            }
+        }
+        for p in field where !chosen.contains(p.id) && chosen.count < 11 - picked.count {
+            chosen.insert(p.id)
+        }
+        // Reihenfolge wie bisher (nach Gesamtstärke): die Torschützen-Wahl
+        // streut über die Reihenfolge — bei unveränderter Auswahl bleiben
+        // Spiele mit festem Seed so identisch.
+        picked.append(contentsOf: field.filter { chosen.contains($0.id) })
         return picked
     }
 

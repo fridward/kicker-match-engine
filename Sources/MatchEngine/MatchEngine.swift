@@ -313,8 +313,11 @@ public enum MatchEngine {
             return available.filter { ids.contains($0.id) }
         }
 
-        // Kein explizites Lineup übergeben → Auto-Top-11 als
-        // Default-Aufstellung (Solo-Fallback bei fehlender Aufstellung).
+        // Kein explizites Lineup übergeben → positionsgerechte Auto-Elf
+        // (Computer-Vereine). Bester Torwart, dann je Position die Stärksten
+        // bis zur Mindestbesetzung 3 V / 3 M / 2 A, die übrigen Plätze nach
+        // Gesamtstärke; fehlt eine Position, rücken andere nach (Frank
+        // 2026-10-15, gleich mit `weiterarbeit/coz-75`).
         var picked: [EnginePlayer] = []
         if let bestGK = available
             .filter({ $0.position == .goalkeeper })
@@ -323,11 +326,21 @@ public enum MatchEngine {
         {
             picked.append(bestGK)
         }
-        let remaining = available
+        let field = available
             .filter { $0.position != .goalkeeper }
             .sorted { $0.overallSkill > $1.overallSkill }
-            .prefix(11 - picked.count)
-        picked.append(contentsOf: remaining)
+        var chosen = Set<UUID>()
+        let minimum: [(EnginePosition, Int)] = [(.defender, 3), (.midfielder, 3), (.forward, 2)]
+        for (pos, count) in minimum {
+            for p in field.filter({ $0.position == pos }).prefix(count) {
+                picked.append(p)
+                chosen.insert(p.id)
+            }
+        }
+        let rest = field
+            .filter { !chosen.contains($0.id) }
+            .prefix(Swift.max(0, 11 - picked.count))
+        picked.append(contentsOf: rest)
         return picked
     }
 

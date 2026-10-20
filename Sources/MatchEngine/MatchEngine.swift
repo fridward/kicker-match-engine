@@ -98,6 +98,14 @@ func engineSqrt(_ x: Double) -> Double {
     #endif
 }
 
+/// GFA-Basic rundet bei der Zuweisung eines Fließkomma-Ausdrucks an eine
+/// Integer-Variable (`A%=3-Sqr(...)`) kaufmännisch. Der Port hatte bis
+/// 2026-10-19 die Wurzeln einzeln abgeschnitten (`3 - Int(sqrt(...))`) und
+/// damit die Rot-Rate verdoppelt (0,41 statt 0,19 Platzverweise pro Spiel).
+func engineRoundedInt(_ x: Double) -> Int {
+    return Int(x.rounded())
+}
+
 /// Server-seitige Match-Engine — Port der iOS-`MatchEngine` (Tribute-
 /// Edition Build 400), die wiederum 1:1 aus KICKER.BAS portiert ist.
 ///
@@ -714,18 +722,19 @@ public enum MatchEngine {
 
         // D-4: 0..<N Range (Original GFA `Random(N)` = 0..N-1).
         // Gelb total: A% = Random(40)^(1/3) + 2 - Sqr(Random(9))
-        let totalYellow = max(0,
-            Int(pow(Double(engineRandomInt(0..<40, &rng)), 1.0 / 3.0))
-            + 2
-            - Int(engineSqrt(Double(engineRandomInt(0..<9, &rng))))
-        )
+        let totalYellow = max(0, engineRoundedInt(
+            pow(Double(engineRandomInt(0..<40, &rng)), 1.0 / 3.0)
+            + 2.0
+            - engineSqrt(Double(engineRandomInt(0..<9, &rng)))
+        ))
         let yellowHome = totalYellow > 0 ? engineRandomIntClosed(0, totalYellow, &rng) : 0
         let yellowAway = totalYellow - yellowHome
 
-        // Rot total: A% = 3 - Sqr(Sqr(Random(230)+1))
-        let totalRed = max(0,
-            3 - Int(engineSqrt(engineSqrt(Double(engineRandomInt(0..<230, &rng) + 1))))
-        )
+        // Rot total: A% = 3 - Sqr(Sqr(Random(230)+1)) — Rundung erst bei
+        // der Integer-Zuweisung (siehe engineRoundedInt).
+        let totalRed = max(0, engineRoundedInt(
+            3.0 - engineSqrt(engineSqrt(Double(engineRandomInt(0..<230, &rng) + 1)))
+        ))
         let redHome = totalRed > 0 ? engineRandomIntClosed(0, totalRed, &rng) : 0
         let redAway = totalRed - redHome
 
@@ -820,16 +829,16 @@ public enum MatchEngine {
         awayTeamName: String,
         using rng: inout R
     ) -> ImpactCards {
-        let totalYellow = max(0,
-            Int(pow(Double(engineRandomInt(0..<40, &rng)), 1.0 / 3.0))
-            + 2
-            - Int(engineSqrt(Double(engineRandomInt(0..<9, &rng))))
-        )
+        let totalYellow = max(0, engineRoundedInt(
+            pow(Double(engineRandomInt(0..<40, &rng)), 1.0 / 3.0)
+            + 2.0
+            - engineSqrt(Double(engineRandomInt(0..<9, &rng)))
+        ))
         let yellowHome = totalYellow > 0 ? engineRandomIntClosed(0, totalYellow, &rng) : 0
         let yellowAway = totalYellow - yellowHome
-        let totalRed = max(0,
-            3 - Int(engineSqrt(engineSqrt(Double(engineRandomInt(0..<230, &rng) + 1))))
-        )
+        let totalRed = max(0, engineRoundedInt(
+            3.0 - engineSqrt(engineSqrt(Double(engineRandomInt(0..<230, &rng) + 1)))
+        ))
         let redHome = totalRed > 0 ? engineRandomIntClosed(0, totalRed, &rng) : 0
         let redAway = totalRed - redHome
 

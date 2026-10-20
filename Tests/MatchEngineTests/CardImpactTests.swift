@@ -43,6 +43,8 @@ final class CardImpactTests: XCTestCase {
     /// Fingerabdruck des bisherigen Ablaufs (cardImpact == false) ueber 300
     /// Seeds. Der Wert wurde VOR dem Einbau von `cardImpact` gemessen — aendert
     /// er sich, hat sich das Original-Verhalten verschoben.
+    /// 2026-10-19 neu gemessen (150008953 → 470976553): Karten-Totale werden
+    /// jetzt wie in GFA gerundet statt einzeln abgeschnitten (Rot-Rate halbiert).
     func test_ohneCardImpact_bleibtDerBisherigeAblauf() {
         // Nur Swift: Kotlin rechnet `Int` mit 32 Bit und leitet den Zufall
         // ueber eigene Helfer ab — der Fingerabdruck ist plattformgebunden.
@@ -61,7 +63,31 @@ final class CardImpactTests: XCTestCase {
         XCTAssertEqual(sum, CardImpactTests.fingerprintBefore)
         #endif
     }
-    static let fingerprintBefore = 150008953
+    static let fingerprintBefore = 470976553
+
+    /// Rot-Rate wie im Original (KICKER.BAS:2705: `A%=3-Sqr(Sqr(Random(230)+1))`,
+    /// GFA rundet bei der Integer-Zuweisung): 0,19 glatte Platzverweise pro
+    /// Spiel (beide Teams), zwei Rote in 2,2 % der Spiele. Bis 2026-10-19
+    /// schnitt der Port die Wurzel einzeln ab und lag bei 0,41 pro Spiel
+    /// (Testerin: zwei Spiele hintereinander mit je zwei Platzverweisen).
+    func test_rotRateEntsprichtDemOriginal() {
+        #if SKIP
+        return
+        #else
+        let games = 3000
+        var reds = 0
+        var twoReds = 0
+        for seed in 1...games {
+            let r = play(seed: seed, cardImpact: true)
+            let straight = r.redCards.filter { $0.isSecondYellow != true }.count
+            reds += straight
+            if straight >= 2 { twoReds += 1 }
+        }
+        let perGame = Double(reds) / Double(games)
+        XCTAssertEqual(perGame, 0.19, accuracy: 0.04, "Rote pro Spiel: \(perGame)")
+        XCTAssertLessThan(Double(twoReds) / Double(games), 0.04, "Spiele mit zwei Roten: \(twoReds)")
+        #endif
+    }
 
     /// Reproduzierbar mit cardImpact.
     func test_cardImpact_gleicherSeedGleichesErgebnis() {

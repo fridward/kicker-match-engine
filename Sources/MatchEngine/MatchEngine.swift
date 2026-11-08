@@ -982,16 +982,36 @@ public enum MatchEngine {
         public let regularAwayGoals: Int
         public let wentToExtraTime: Bool
         public let wentToPenalties: Bool
+        /// Torminuten aus 90 Minuten und Verlaengerung (ohne Elfer), zeitlich
+        /// sortiert — fuer Spielszenen (Relegation/Playoff online, 2026-11-08).
+        /// Rein mitgeschrieben, kein zusaetzlicher Zufallszug.
+        public let goalMinutes: [HalfResult.GoalMinute]
+        /// Elfmeterfolge, falls es eines gab — in Schussreihenfolge.
+        public let penaltyShots: [KnockoutPenaltyShot]
 
         public init(homeGoals: Int, awayGoals: Int,
                     regularHomeGoals: Int, regularAwayGoals: Int,
-                    wentToExtraTime: Bool, wentToPenalties: Bool) {
+                    wentToExtraTime: Bool, wentToPenalties: Bool,
+                    goalMinutes: [HalfResult.GoalMinute] = [],
+                    penaltyShots: [KnockoutPenaltyShot] = []) {
             self.homeGoals = homeGoals
             self.awayGoals = awayGoals
             self.regularHomeGoals = regularHomeGoals
             self.regularAwayGoals = regularAwayGoals
             self.wentToExtraTime = wentToExtraTime
             self.wentToPenalties = wentToPenalties
+            self.goalMinutes = goalMinutes
+            self.penaltyShots = penaltyShots
+        }
+    }
+
+    /// Ein Schuss im Elfmeterschiessen der Sub-Simulation.
+    public struct KnockoutPenaltyShot: Equatable {
+        public let isHome: Bool
+        public let scored: Bool
+        public init(isHome: Bool, scored: Bool) {
+            self.isHome = isHome
+            self.scored = scored
         }
     }
 
@@ -1013,24 +1033,42 @@ public enum MatchEngine {
         var ag = regAway
         var extraTime = false
         var penalties = false
+        var minutes: [HalfResult.GoalMinute] = reg.goalMinutes
+        var shots: [KnockoutPenaltyShot] = []
 
         if tieBreak && hg == ag {
             extraTime = true
             let et = ermittleErgebnis(home, away, ticks: 12, startMinute: 90, using: &rng)
             hg += et.homeGoals
             ag += et.awayGoals
+            minutes.append(contentsOf: et.goalMinutes)
             if hg == ag {
                 penalties = true
                 let pen = knockoutPenalties(using: &rng)
                 hg += pen.home
                 ag += pen.away
+                shots = pen.shots
             }
+        }
+
+        // Stabil nach Minute/Nachspielzeit sortieren (Einfuegesortierung —
+        // unter Skip ohne Tupel-Vergleich).
+        var sorted: [HalfResult.GoalMinute] = []
+        for gm in minutes {
+            var i = 0
+            while i < sorted.count
+                    && (sorted[i].minute < gm.minute
+                        || (sorted[i].minute == gm.minute && sorted[i].stoppage <= gm.stoppage)) {
+                i += 1
+            }
+            sorted.insert(gm, at: i)
         }
 
         return KnockoutLegResult(
             homeGoals: hg, awayGoals: ag,
             regularHomeGoals: regHome, regularAwayGoals: regAway,
-            wentToExtraTime: extraTime, wentToPenalties: penalties
+            wentToExtraTime: extraTime, wentToPenalties: penalties,
+            goalMinutes: sorted, penaltyShots: shots
         )
     }
 
@@ -1041,9 +1079,10 @@ public enum MatchEngine {
     /// braucht diese Sub-Simulation nicht (kein Visualisierungs-Pfad).
     private static func knockoutPenalties<R: RandomNumberGenerator>(
         using rng: inout R
-    ) -> (home: Int, away: Int) {
+    ) -> KnockoutPenaltyOutcome {
         var home = 0
         var away = 0
+        var shots: [KnockoutPenaltyShot] = []
         var hTaken = 0
         var aTaken = 0
         let maxRegular = 5
@@ -1053,11 +1092,15 @@ public enum MatchEngine {
         var decided = false
         while (hTaken < maxRegular || aTaken < maxRegular) && !decided {
             if hTaken < maxRegular {
-                if Int.random(in: 0..<4, using: &rng) > 0 { home += 1 }
+                let hit = Int.random(in: 0..<4, using: &rng) > 0
+                if hit { home += 1 }
+                shots.append(KnockoutPenaltyShot(isHome: true, scored: hit))
                 hTaken += 1
             }
             if !decided && aTaken < maxRegular {
-                if Int.random(in: 0..<4, using: &rng) > 0 { away += 1 }
+                let hit = Int.random(in: 0..<4, using: &rng) > 0
+                if hit { away += 1 }
+                shots.append(KnockoutPenaltyShot(isHome: false, scored: hit))
                 aTaken += 1
             }
             let hLeft = max(0, maxRegular - hTaken)
@@ -1072,8 +1115,17 @@ public enum MatchEngine {
             let a = Int.random(in: 0..<4, using: &rng) > 0
             if h { home += 1 }
             if a { away += 1 }
+            shots.append(KnockoutPenaltyShot(isHome: true, scored: h))
+            shots.append(KnockoutPenaltyShot(isHome: false, scored: a))
         }
 
-        return (home, away)
+        return KnockoutPenaltyOutcome(home: home, away: away, shots: shots)
+    }
+
+    /// Ergebnis des Sub-Elfmeterschiessens (Struktur statt Tupel — Skip).
+    struct KnockoutPenaltyOutcome {
+        let home: Int
+        let away: Int
+        let shots: [KnockoutPenaltyShot]
     }
 }
